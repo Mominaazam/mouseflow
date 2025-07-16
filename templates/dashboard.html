@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>MouseFlowPractice Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+    .container { max-width: 1400px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+    th { background-color: #4CAF50; color: white; font-weight: bold; }
+    tr:nth-child(even) { background-color: #f9f9f9; }
+    tr:hover { background-color: #f0f0f0; }
+    video { width: 200px; height: 150px; border-radius: 4px; }
+    button { 
+      cursor: pointer; 
+      padding: 8px 16px; 
+      margin: 2px;
+      border: none;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .btn-delete { background-color: #f44336; color: white; }
+    .btn-generate { background-color: #2196F3; color: white; }
+    .btn-clear { background-color: #ff9800; color: white; padding: 12px 24px; font-size: 14px; }
+    .video-container { text-align: center; }
+    .no-video { color: #999; font-style: italic; }
+    h2 { color: #333; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Mouse Flow Session Recordings</h2>
+
+    <button class="btn-clear" onclick="clearAllSessions()">Delete All Sessions</button>
+
+    <table id="sessionTable">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>IP Address</th>
+          <th>User Agent</th>
+          <th>Time</th>
+          <th>Clicks</th>
+          <th>Move %</th>
+          <th>Scroll %</th>
+          <th>Video</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in sessions %}
+        <tr id="row-{{ s.id }}">
+          <td>{{ s.id }}</td>
+          <td>{{ s.ip_address }}</td>
+          <td>{{ s.user_agent[:50] }}{% if s.user_agent|length > 50 %}...{% endif %}</td>
+          <td>{{ s.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+          <td>{{ s.clicks }}</td>
+          <td>{{ s.move_percentage }}%</td>
+          <td>{{ s.scrolls }}%</td>
+          <td class="video-container">
+            {% if s.video_path %}
+              <video controls preload="metadata" style="max-width: 200px; max-height: 150px; border: 1px solid #ccc;" 
+                     onerror="handleVideoError(this, '{{ s.video_path }}')" 
+                     onloadstart="console.log('Loading video: {{ s.video_path }}')"
+                     oncanplay="console.log('Video can play: {{ s.video_path }}')"
+                     onloadeddata="console.log('Video data loaded: {{ s.video_path }}')">
+                {% if s.video_path.endswith('.mp4') %}
+                  <source src="{{ s.video_path }}" type="video/mp4">
+                {% elif s.video_path.endswith('.avi') %}
+                  <source src="{{ s.video_path }}" type="video/x-msvideo">
+                {% else %}
+                  <source src="{{ s.video_path }}" type="video/mp4">
+                {% endif %}
+                Your browser does not support the video tag.
+              </video>
+              <div class="video-fallback" style="margin-top: 5px; font-size: 11px; color: #666; display: none;">
+                <a href="{{ s.video_path }}" target="_blank">Open Video</a>
+                <br>
+                <small>Video format: {{ s.video_path.split('.')[-1] }}</small>
+                <br>
+                <small>Session ID: {{ s.id }}</small>
+                <br>
+                <small>Path: {{ s.video_path }}</small>
+              </div>
+            {% else %}
+              <div class="no-video">No video</div>
+              <button class="btn-generate" onclick="generateVideo('{{ s.id }}')">Generate Video</button>
+              <button class="btn-generate" onclick="generateRealBrowserVideo('{{ s.id }}')" style="background-color: #4CAF50;">Real Browser</button>
+            {% endif %}
+          </td>
+          <td>
+            <button class="btn-delete" onclick="deleteSession('{{ s.id }}')">Delete</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    function handleVideoError(videoElement, videoPath) {
+      console.error('Video error for:', videoPath);
+      videoElement.style.display = 'none';
+      const fallback = videoElement.nextElementSibling;
+      if (fallback && fallback.classList.contains('video-fallback')) {
+        fallback.style.display = 'block';
+      }
+    }
+
+    function deleteSession(sessionId) {
+      if (!confirm('Delete session ' + sessionId + '?')) return;
+      fetch('/delete_session/' + sessionId, {
+        method: 'DELETE',
+      }).then(res => {
+        if (res.ok) {
+          document.getElementById('row-' + sessionId).remove();
+        } else {
+          res.json().then(data => {
+            alert('Failed to delete session: ' + (data.message || 'Unknown error'));
+          }).catch(() => {
+            alert('Failed to delete session');
+          });
+        }
+      }).catch(error => {
+        alert('Error deleting session: ' + error);
+      });
+    }
+
+    function generateVideo(sessionId) {
+      const button = event.target;
+      const originalText = button.textContent;
+      button.textContent = 'Generating...';
+      button.disabled = true;
+      
+      console.log('Generating video for session:', sessionId);
+      
+      // Try simple video first (more reliable)
+      fetch('/generate_simple_video/' + sessionId, {
+        method: 'POST',
+      }).then(res => {
+        console.log('Response status:', res.status);
+        console.log('Response headers:', res.headers);
+        
+        // Check if response is JSON
+        const contentType = res.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          return res.json();
+        } else {
+          // If not JSON, get the text response for debugging
+          return res.text().then(text => {
+            console.error('Non-JSON response:', text);
+            throw new Error('Server returned HTML instead of JSON. Check server logs for details.');
+          });
+        }
+      }).then(data => {
+        console.log('Simple video generation response:', data);
+        if (data.status === 'video_generated') {
+          console.log('Simple video generated successfully, reloading page...');
+          // Reload the page to show the new video
+          location.reload();
+        } else {
+          console.log('Simple video failed, trying full video generation...');
+          // Fall back to full video generation
+          return fetch('/generate_video/' + sessionId, {
+            method: 'POST',
+          }).then(res => {
+            const contentType = res.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+              return res.json();
+            } else {
+              return res.text().then(text => {
+                console.error('Non-JSON response from full video:', text);
+                throw new Error('Full video generation returned HTML instead of JSON.');
+              });
+            }
+          });
+        }
+      }).then(data => {
+        if (data && data.status === 'video_generated') {
+          console.log('Full video generated successfully, reloading page...');
+          location.reload();
+        } else if (data) {
+          console.error('Failed to generate video:', data.message);
+          alert('Failed to generate video: ' + (data.message || 'Unknown error'));
+          button.textContent = originalText;
+          button.disabled = false;
+        }
+      }).catch(error => {
+        console.error('Error generating video:', error);
+        alert('Error generating video: ' + error.message);
+        button.textContent = originalText;
+        button.disabled = false;
+      });
+    }
+
+    function generateRealBrowserVideo(sessionId) {
+      const button = event.target;
+      const originalText = button.textContent;
+      button.textContent = 'Generating...';
+      button.disabled = true;
+
+      console.log('Generating real browser video for session:', sessionId);
+
+      fetch('/generate_real_browser_video/' + sessionId, {
+        method: 'POST',
+      }).then(res => {
+        console.log('Real browser response status:', res.status);
+        console.log('Real browser response headers:', res.headers);
+        
+        // Check if response is JSON
+        const contentType = res.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          return res.json();
+        } else {
+          // If not JSON, get the text response for debugging
+          return res.text().then(text => {
+            console.error('Non-JSON response from real browser:', text);
+            throw new Error('Real browser video generation returned HTML instead of JSON. Check server logs for details.');
+          });
+        }
+      }).then(data => {
+        console.log('Real browser video generation response:', data);
+        if (data.status === 'video_generated') {
+          console.log('Real browser video generated successfully, reloading page...');
+          location.reload();
+        } else {
+          console.error('Failed to generate real browser video:', data.message);
+          alert('Failed to generate real browser video: ' + (data.message || 'Unknown error'));
+          button.textContent = originalText;
+          button.disabled = false;
+        }
+      }).catch(error => {
+        console.error('Error generating real browser video:', error);
+        alert('Error generating real browser video: ' + error.message);
+        button.textContent = originalText;
+        button.disabled = false;
+      });
+    }
+
+    function clearAllSessions() {
+      if (!confirm("Delete ALL sessions? This action cannot be undone.")) return;
+      fetch('/clear_sessions', { method: 'DELETE' }).then(res => {
+        if (res.ok) {
+          document.querySelectorAll('tbody tr').forEach(row => row.remove());
+        } else {
+          alert("Failed to clear sessions");
+        }
+      });
+    }
+
+    // Add some debugging info on page load
+    window.addEventListener('load', function() {
+      console.log('Dashboard loaded');
+      const videos = document.querySelectorAll('video');
+      console.log('Found', videos.length, 'video elements');
+      videos.forEach((video, index) => {
+        console.log(`Video ${index + 1}:`, video.src);
+      });
+    });
+  </script>
+</body>
+</html>
